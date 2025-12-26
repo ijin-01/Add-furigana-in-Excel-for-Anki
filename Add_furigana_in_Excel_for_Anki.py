@@ -1,4 +1,4 @@
-import re, jaconv, sys, os, csv, builtins, pandas as pd, platform, subprocess, math
+import re, jaconv, sys, os, csv, builtins, pandas as pd, platform, subprocess
 
 from fugashi import Tagger
 from PyQt6.QtGui import *
@@ -8,51 +8,205 @@ from PyQt6.QtCore import *
 from openpyxl import *
 
 # 후리가나 붙이기 ------------------------------------------------------------------
-CJK_Unified_Ideographs = r'[\u4E00-\u9FFF]'
+def process_japanese_text(text, exclude_text='', kana_mode='hiragana'):
+    CJK_Unified_Ideographs = r'[\u4E00-\u9FFF]+'
 
-def add_furigana_with_fugashi(text, exclude_text='', kana_mode='hiragana'):
-    """
-    text: 후리가나를 붙이려는 대상 텍스트 (B 문자열)
-    exclude_text: 후리가나를 붙이지 않으려는 한자를 포함하는 텍스트 (A 문자열)
-    """
-
-    # 1. A 문자열에서 CJK 범위의 한자를 추출하여 set에 저장
-    excluded_kanji_set = set(ch for ch in exclude_text if re.search(CJK_Unified_Ideographs, ch))
-
-    tagger = Tagger()
-    tokens = tagger(text)
-
-    result = []
-    for token in tokens:
-        surface = token.surface
-        # 2. 현재 토큰이 A 문자열의 한자를 하나라도 포함하면 후리가나 생략
-        #    (any()로 한 글자라도 포함하면 True)
-        if any(ch in excluded_kanji_set for ch in surface):
-            result.append(surface)
-        else:
-            # 3. 그 외 일반적인 경우에만 후리가나를 부착
-            if bool(re.compile(CJK_Unified_Ideographs).search(surface)):
-                kana = token.feature.kana
-                if kana:
-                    if kana_mode == 'katakana':
-                        result.append(f" {surface}[{kana}]")
-                    elif kana_mode == 'hiragana':
-                        result.append(f" {surface}[{jaconv.kata2hira(kana)}]")
+    def split_into_blocks(word: str):
+        """
+        주어진 문자열(word)을 '연속된 한자' 블록(K)과
+        '연속된 그 외 문자(주로 히라가나 등)' 블록(H)으로 나누어 리스트로 반환.
+        
+        예: 
+            "問題視する" -> [("K", "問題"), ("K", "視"), ("H", "する")]
+            "ご飯" -> [("H", "ご"), ("K", "飯")]
+            "忘れ去る" -> [("K", "忘"), ("H", "れ"), ("K", "去"), ("H", "る")]
+        """
+        blocks = []
+        if not word:
+            return blocks
+        
+        # 현재 블록의 종류(K or H), 내용
+        current_type = None
+        current_buf = []
+        
+        def flush_buffer():
+            """누적된 버퍼를 blocks 리스트에 추가하고 비움"""
+            nonlocal current_type, current_buf, blocks
+            if current_buf:
+                blocks.append((current_type, ''.join(current_buf)))
+                current_buf = []
+        
+        for ch in word:
+            if re.compile(CJK_Unified_Ideographs).match(ch):
+                # 현재 문자가 한자
+                if current_type == 'K':  # 이전도 한자 블록
+                    current_buf.append(ch)
                 else:
-                    # 형태소 분석 결과 kana 정보가 없는 경우는 그대로 출력
-                    result.append(surface)
+                    # 블록 타입이 바뀌므로 flush 후 새 블록 시작
+                    flush_buffer()
+                    current_type = 'K'
+                    current_buf.append(ch)
             else:
-                # CJK 범위 이외(히라가나, 가타카나, 알파벳 등)는 그냥 이어붙임
-                result.append(surface)
+                # 현재 문자는 한자가 아님(히라가나, 가타카나, 알파벳, 기타 등)
+                if current_type == 'H':
+                    current_buf.append(ch)
+                else:
+                    flush_buffer()
+                    current_type = 'H'
+                    current_buf.append(ch)
+        
+        # 마지막 누적 블록 flush
+        flush_buffer()
+        return blocks
 
-    # 앞쪽에 공백이 있을 수 있으므로 정리
-    msg = "".join(result)
-    if msg.startswith(' '):
-        msg = msg[1:]
-    return msg
+
+    def align_word_with_furigana(word: str, reading: str) -> str:
+        """
+        word(실제 표기)와 reading(전체 후리가나)을 받아
+        다음 예시처럼 한자 블록마다 후리가나를 할당하여 변환:
+        
+        1) "ご飯" + "ごはん"            -> "ご 飯[はん]"
+        2) "忘れ去る" + "わすれさる"    -> "忘[わす]れ 去[さ]る"
+        3) "問題視する" + "もんだいしする" -> "問題[もんだい] 視[し]する"
+        
+        구현 아이디어(단순/예시용):
+        - word를 '연속된 한자(K) / 그 외(H)' 블록 리스트로 분할
+        - reading에서 각 블록에 대응하는 후리가나를 조금씩 소진하면서 할당
+            * 한자(K) 블록은 그 다음 블록(특히 H 블록)이 reading 상에 등장하기 직전까지를 통째로 할당
+            * H 블록은 가능하면 reading에서도 동일하게 소진(예: 'ご' ↔ 'ご')
+        - 블록 사이에서 K→H, H→K 등으로 전환될 때 적절히 공백 삽입
+        """
+        # 가타카나 모드일 경우 히라가나로 변환
+        if kana_mode == 'katakana':
+            reading = jaconv.kata2hira(reading)
+
+        # 1) 단어를 블록 리스트로 분할
+        blocks = split_into_blocks(word)
+        
+        # 결과 문자열을 쌓을 리스트
+        result = []
+        # reading 소비 인덱스
+        r_idx = 0
+        
+        # 다음 블록의 문자열이 reading 내에 있는지 찾는 헬퍼 함수
+        def find_next_block_in_reading(next_block_str):
+            """reading[r_idx:]에서 next_block_str이 등장하는 첫 위치를 찾는다.
+            없으면 -1 반환"""
+            if not next_block_str:
+                return -1
+            return reading.find(next_block_str, r_idx)
+        
+        prev_type = None
+        
+        for i, (btype, btext) in enumerate(blocks):
+            if btype == 'H':
+                # H(히라가나/기타) 블록
+                # 가능하면 reading에서도 btext가 일치하면 소비
+                length = len(btext)
+                # reading[r_idx : r_idx+length]와 btext가 같으면 그대로 소비
+                if reading[r_idx:r_idx+length] == btext:
+                    # 그대로 사용
+                    result.append(btext)
+                    r_idx += length
+                else:
+                    # 일치하지 않으면 그냥 원문 출력 (후리가나 소비는 없음)
+                    result.append(btext)
+                
+                prev_type = 'H'
+            
+            else:
+                # K(한자) 블록
+                # 다음 블록이 있다면 그 블록의 텍스트가 reading 상 어느 위치에 나오는지를 확인
+                if (i + 1) < len(blocks):
+                    next_btype, next_btext = blocks[i+1]
+                else:
+                    next_btype, next_btext = None, ''
+                
+                # next_btext가 혹시 reading에서 r_idx 이후에 등장한다면
+                # 그 위치를 찾아서 그 직전까지를 이 한자 블록의 후리가나로 할당
+                pos_next = -1
+                if next_btype == 'H' and next_btext:
+                    # 다음 블록이 H라면, reading 상에 exact match로 등장할 수 있으니 찾아봄
+                    pos_next = find_next_block_in_reading(next_btext)
+                
+                if pos_next >= 0:
+                    # next_btext가 r_idx 이후에 있다면, 그 직전까지를 한자 블록 후리가나로 할당
+                    allocated = reading[r_idx:pos_next]
+                    r_idx = pos_next
+                else:
+                    # 없다면 남은 reading 전부 할당
+                    allocated = reading[r_idx:]
+                    r_idx = len(reading)
+                
+                # 앞 블록이 H였으면 한자 블록 앞에 공백 삽입 (질문 예시 규칙)
+                if prev_type == 'H' and len(result) > 0 and result[-1] != ' ':
+                    result.append(' ')
+                
+                # "한자블록[후리가나]" 형태로 변환
+                if allocated:
+                    if kana_mode == 'katakana':
+                        result.append(f"{btext}[{jaconv.hira2kata(allocated)}]")
+                    else:
+                        result.append(f"{btext}[{allocated}]")
+                else:
+                    # 후리가나가 아예 없으면 그냥 한자 블록만 출력
+                    result.append(btext)
+                
+                prev_type = 'K'
+        
+        return ''.join(result)
+
+
+    # 이 함수는 "문장 내 여러 '단어[후리가나]' 패턴"을 찾아 변환해 주는 예시
+    # 정규식: ([^\s\[\]]+) => 공백/대괄호 제외 1글자 이상
+    #        \[([ぁ-んァ-ン]+)\] => 대괄호 안 히라가나 또는 가타카나 1글자 이상
+    WORD_READING_PATTERN = re.compile(r'([^\s\[\]]+)\[([ぁ-んァ-ン]+)\]')
+
+    def convert_text(text: str) -> str:
+        """문장 전체에서 '단어[후리가나]' 형태를 찾아 변환"""
+        def repl_func(m: re.Match) -> str:
+            word = m.group(1)    # 대괄호 앞 실제 단어
+            reading = m.group(2) # 대괄호 안 히라가나
+
+            return align_word_with_furigana(word, reading)
+        
+        return WORD_READING_PATTERN.sub(repl_func, text)
+
+    def add_furigana_with_fugashi(_text, _exclude_text='', _kana_mode='hiragana'):
+        excluded_kanji_set = set(ch for ch in exclude_text if re.search(CJK_Unified_Ideographs, ch))
+        tagger = Tagger()
+        tokens = tagger(text)
+
+        result = []
+        for token in tokens:
+            surface = token.surface
+            # exclude_text에 있는 한자가 하나라도 포함되어 있으면 후리가나 생략
+            if any(ch in excluded_kanji_set for ch in surface):
+                result.append(surface)
+            else:
+                # 그 외 일반적인 경우만 후리가나 부착
+                if bool(re.compile(CJK_Unified_Ideographs).search(surface)):
+                    kana = token.feature.kana
+                    if kana:
+                        if kana_mode == 'katakana':
+                            result.append(f" {surface}[{kana}]")
+                        else:  # 기본: 히라가나
+                            result.append(f" {surface}[{jaconv.kata2hira(kana)}]")
+                    else:
+                        result.append(surface)
+                else:
+                    # 한자 이외(히라가나, 가타카나, 알파벳 등)는 그대로 이어붙임
+                    result.append(surface)
+
+        msg = "".join(result)
+        if msg.startswith(' '):
+            msg = msg[1:]
+        return msg
+
+    return convert_text(add_furigana_with_fugashi(text, exclude_text, kana_mode))
 '''
 japanese_text = "詐欺に遭い憤った被害者達が会社を相手に抗議活動を行った。あの人が言うと、褒め言葉も嫌味に聞こえる。"
-print(add_furigana_with_fugashi(japanese_text))
+print(process_japanese_text(japanese_text))
 '''
 
 #-----------------------------------------------------------------------------------
@@ -236,7 +390,7 @@ class Thread(QThread):
                         if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
                             self.sheet[number_to_column(column_to_number(x)+1)+str(y[0])] = item
                         else:
-                            self.sheet[number_to_column(column_to_number(x)+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1], kana_mode=self.parent.kana_mode)
+                            self.sheet[number_to_column(column_to_number(x)+1)+str(y[0])] = process_japanese_text(text=y[1], kana_mode=self.parent.kana_mode)
                 self.workbook.save(self.filepath)
 
             if self.tuples:
@@ -255,14 +409,14 @@ class Thread(QThread):
                                     if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
                                         self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = item
                                     else:
-                                        self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1],exclude_text=z[1], kana_mode=self.parent.kana_mode)
+                                        self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = process_japanese_text(text=y[1],exclude_text=z[1], kana_mode=self.parent.kana_mode)
                         else:
                             item = str(self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])].value)
                             
                             if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
                                 self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = item
                             else:
-                                self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1], kana_mode=self.parent.kana_mode)
+                                self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = process_japanese_text(text=y[1], kana_mode=self.parent.kana_mode)
                     
                     # 단어 처리
                     for y in words:
@@ -271,7 +425,7 @@ class Thread(QThread):
                         if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
                             self.sheet[number_to_column(column_to_number(x[0])+1)+str(y[0])] = item
                         else:
-                            self.sheet[number_to_column(column_to_number(x[0])+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1], kana_mode=self.parent.kana_mode)
+                            self.sheet[number_to_column(column_to_number(x[0])+1)+str(y[0])] = process_japanese_text(text=y[1], kana_mode=self.parent.kana_mode)
             
                 self.workbook.save(self.filepath)
 
@@ -291,7 +445,7 @@ class Thread(QThread):
                         if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
                             df.iloc[y[0]-1, column_to_number(x)] = item
                         else:
-                            df.iloc[y[0]-1, column_to_number(x)] = add_furigana_with_fugashi(text=y[1],kana_mode=self.parent.kana_mode)
+                            df.iloc[y[0]-1, column_to_number(x)] = process_japanese_text(text=y[1],kana_mode=self.parent.kana_mode)
                 df.to_csv(self.filepath, encoding='utf-8-sig', index=False, header=None)
 
             if self.tuples:
@@ -310,14 +464,14 @@ class Thread(QThread):
                                     if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
                                         df.iloc[y[0]-1, column_to_number(x[1])] = item
                                     else:
-                                        df.iloc[y[0]-1, column_to_number(x[1])] = add_furigana_with_fugashi(text=y[1], exclude_text=z[1],kana_mode=self.parent.kana_mode)
+                                        df.iloc[y[0]-1, column_to_number(x[1])] = process_japanese_text(text=y[1], exclude_text=z[1],kana_mode=self.parent.kana_mode)
                         else:
                             item = str(df.iloc[y[0]-1, column_to_number(x[1])])
 
                             if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
                                 df.iloc[y[0]-1, column_to_number(x[1])] = item
                             else:
-                                df.iloc[y[0]-1, column_to_number(x[1])] = add_furigana_with_fugashi(text=y[1],kana_mode=self.parent.kana_mode)
+                                df.iloc[y[0]-1, column_to_number(x[1])] = process_japanese_text(text=y[1],kana_mode=self.parent.kana_mode)
                     
                     #단어 처리
                     for y in words:
@@ -326,7 +480,7 @@ class Thread(QThread):
                         if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
                             df.iloc[y[0]-1, column_to_number(x[0])] = item
                         else:
-                            df.iloc[y[0]-1, column_to_number(x[0])] = add_furigana_with_fugashi(text=y[1],kana_mode=self.parent.kana_mode)
+                            df.iloc[y[0]-1, column_to_number(x[0])] = process_japanese_text(text=y[1],kana_mode=self.parent.kana_mode)
                 df.to_csv(self.filepath, encoding='utf-8-sig', index=False, header=None)
 
         else:
@@ -556,7 +710,7 @@ class MainWindow(QWidget):
                 self.alert_bracket_overflow = 0
         
     def SelctFilePath(self):
-        filepath = QFileDialog.getOpenFileName(self, 'ファイル選択', '', 'Excel Files (*.xlsx *.xlsm *.csv)')
+        filepath = QFileDialog.getOpenFileName(self, 'ファイル選択', '','Excel Files (*.xlsx *.xlsm *.csv)')
         self.qle_file_path.setText(filepath[0])
 
     def Start(self):
