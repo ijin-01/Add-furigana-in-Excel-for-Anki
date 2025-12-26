@@ -1,4 +1,4 @@
-import re, jaconv, sys, os, csv, builtins, pandas as pd, platform, subprocess
+import re, jaconv, sys, os, csv, builtins, pandas as pd, platform, subprocess, math
 
 from fugashi import Tagger
 from PyQt6.QtGui import *
@@ -218,7 +218,7 @@ class Thread(QThread):
                         if x not in Existed_column_list:
                             Existed_column_list.append(x)
 
-        if Existed_column_list:
+        if Existed_column_list and self.parent.overWrite_mode == True:
             # 열이 겹치는 경우 시그널로 메시지 전송
             self.fault_signal.emit(1)
             self.fault_message = '出力しようとする'+'、'.join(Existed_column_list) + '列に既にデータがあります。進めますか？'
@@ -231,7 +231,12 @@ class Thread(QThread):
             if self.lists:
                 for x in self.lists:
                     for y in self.get_multiple_columns_with_rows(x)[x]:
-                        self.sheet[number_to_column(column_to_number(x)+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1], kana_mode=self.parent.kana_mode)
+                        item = str(self.sheet[number_to_column(column_to_number(x)+1)+str(y[0])].value)
+
+                        if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
+                            self.sheet[number_to_column(column_to_number(x)+1)+str(y[0])] = item
+                        else:
+                            self.sheet[number_to_column(column_to_number(x)+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1], kana_mode=self.parent.kana_mode)
                 self.workbook.save(self.filepath)
 
             if self.tuples:
@@ -245,13 +250,28 @@ class Thread(QThread):
                         if y[0] in words_number:
                             for z in words:
                                 if z[0] == y[0]:
-                                    self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1],exclude_text=z[1], kana_mode=self.parent.kana_mode)
+                                    item = str(self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])].value)
+
+                                    if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
+                                        self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = item
+                                    else:
+                                        self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1],exclude_text=z[1], kana_mode=self.parent.kana_mode)
                         else:
-                            self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1], kana_mode=self.parent.kana_mode)
+                            item = str(self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])].value)
+                            
+                            if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
+                                self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = item
+                            else:
+                                self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1], kana_mode=self.parent.kana_mode)
                     
                     # 단어 처리
                     for y in words:
-                        self.sheet[number_to_column(column_to_number(x[0])+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1], kana_mode=self.parent.kana_mode)
+                        item = str(self.sheet[number_to_column(column_to_number(x[0])+1)+str(y[0])].value)
+
+                        if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
+                            self.sheet[number_to_column(column_to_number(x[0])+1)+str(y[0])] = item
+                        else:
+                            self.sheet[number_to_column(column_to_number(x[0])+1)+str(y[0])] = add_furigana_with_fugashi(text=y[1], kana_mode=self.parent.kana_mode)
             
                 self.workbook.save(self.filepath)
 
@@ -266,7 +286,12 @@ class Thread(QThread):
             if self.lists:
                 for x in self.lists:
                     for y in self.get_multiple_columns_with_rows(x)[x]:
-                        df.iloc[y[0]-1, column_to_number(x)] = add_furigana_with_fugashi(text=y[1],kana_mode=self.parent.kana_mode)
+                        item = str(df.iloc[y[0]-1, column_to_number(x)])
+                        
+                        if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
+                            df.iloc[y[0]-1, column_to_number(x)] = item
+                        else:
+                            df.iloc[y[0]-1, column_to_number(x)] = add_furigana_with_fugashi(text=y[1],kana_mode=self.parent.kana_mode)
                 df.to_csv(self.filepath, encoding='utf-8-sig', index=False, header=None)
 
             if self.tuples:
@@ -280,13 +305,28 @@ class Thread(QThread):
                         if y[0] in words_number:
                             for z in words:
                                 if z[0] == y[0]:
-                                    df.iloc[y[0]-1, column_to_number(x[1])] = add_furigana_with_fugashi(text=y[1], exclude_text=z[1],kana_mode=self.parent.kana_mode)
+                                    item = str(df.iloc[y[0]-1, column_to_number(x[1])])
+
+                                    if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
+                                        df.iloc[y[0]-1, column_to_number(x[1])] = item
+                                    else:
+                                        df.iloc[y[0]-1, column_to_number(x[1])] = add_furigana_with_fugashi(text=y[1], exclude_text=z[1],kana_mode=self.parent.kana_mode)
                         else:
-                            df.iloc[y[0]-1, column_to_number(x[1])] = add_furigana_with_fugashi(text=y[1],kana_mode=self.parent.kana_mode)
+                            item = str(df.iloc[y[0]-1, column_to_number(x[1])])
+
+                            if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
+                                df.iloc[y[0]-1, column_to_number(x[1])] = item
+                            else:
+                                df.iloc[y[0]-1, column_to_number(x[1])] = add_furigana_with_fugashi(text=y[1],kana_mode=self.parent.kana_mode)
                     
                     #단어 처리
                     for y in words:
-                        df.iloc[y[0]-1, column_to_number(x[0])] = add_furigana_with_fugashi(text=y[1],kana_mode=self.parent.kana_mode)
+                        item = str(df.iloc[y[0]-1, column_to_number(x[0])])
+
+                        if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
+                            df.iloc[y[0]-1, column_to_number(x[0])] = item
+                        else:
+                            df.iloc[y[0]-1, column_to_number(x[0])] = add_furigana_with_fugashi(text=y[1],kana_mode=self.parent.kana_mode)
                 df.to_csv(self.filepath, encoding='utf-8-sig', index=False, header=None)
 
         else:
@@ -414,6 +454,7 @@ class MainWindow(QWidget):
     window_width = 500
     window_height = 400
     kana_mode = 'hiragana'
+    overWrite_mode = False
 
     def __init__(self):
         super(MainWindow, self).__init__()
@@ -578,6 +619,13 @@ class MainWindow(QWidget):
         elif self.katakana_btn.isChecked():
             self.kana_mode = 'katakana'
 
+    def get_overWrite_btn_value(self):
+        if self.overWrite_btn.isChecked():
+            self.overWrite_mode = True
+        else:
+            self.overWrite_mode = False
+            
+
     def initUI(self):
         self.setWindowTitle('Add furigana in Excel for Anki')
         '''
@@ -615,6 +663,8 @@ class MainWindow(QWidget):
         self.hiragana_btn.clicked.connect(self.get_selected_value)
         self.katakana_btn = QRadioButton('片仮名出力', self)
         self.katakana_btn.clicked.connect(self.get_selected_value)
+        self.overWrite_btn = QCheckBox('上書きモード', self)
+        self.overWrite_btn.clicked.connect(self.get_overWrite_btn_value)
 
         self.column_input = AutoLineEdit()
         self.label_alert = QLabel('', self)
@@ -639,11 +689,14 @@ class MainWindow(QWidget):
         kana_btn_layout = QVBoxLayout()
         kana_btn_layout.addWidget(self.hiragana_btn)
         kana_btn_layout.addWidget(self.katakana_btn)
+        kana_btn_layout.addWidget(QLabel('', self))
+        kana_btn_layout.addWidget(self.overWrite_btn)
         kana_btn_layout.addStretch(1)
 
         label_n_btn_layout = QHBoxLayout()
         label_n_btn_layout.addWidget(label_column_input)
         label_n_btn_layout.addStretch(1)
+        label_n_btn_layout.addWidget(QLabel('', self))
         label_n_btn_layout.addLayout(kana_btn_layout)
 
         column_input_layout = QHBoxLayout()
