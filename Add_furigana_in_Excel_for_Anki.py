@@ -80,82 +80,90 @@ def process_japanese_text(text, exclude_text='', kana_mode='hiragana'):
         if kana_mode == 'katakana':
             reading = jaconv.kata2hira(reading)
 
-        # 1) 단어를 블록 리스트로 분할
-        blocks = split_into_blocks(word)
-        
         # 결과 문자열을 쌓을 리스트
         result = []
-        # reading 소비 인덱스
-        r_idx = 0
-        
-        # 다음 블록의 문자열이 reading 내에 있는지 찾는 헬퍼 함수
-        def find_next_block_in_reading(next_block_str):
-            """reading[r_idx:]에서 next_block_str이 등장하는 첫 위치를 찾는다.
-            없으면 -1 반환"""
-            if not next_block_str:
-                return -1
-            return reading.find(next_block_str, r_idx)
-        
-        prev_type = None
-        
-        for i, (btype, btext) in enumerate(blocks):
-            if btype == 'H':
-                # H(히라가나/기타) 블록
-                # 가능하면 reading에서도 btext가 일치하면 소비
-                length = len(btext)
-                # reading[r_idx : r_idx+length]와 btext가 같으면 그대로 소비
-                if reading[r_idx:r_idx+length] == btext:
-                    # 그대로 사용
-                    result.append(btext)
-                    r_idx += length
-                else:
-                    # 일치하지 않으면 그냥 원문 출력 (후리가나 소비는 없음)
-                    result.append(btext)
-                
-                prev_type = 'H'
-            
-            else:
-                # K(한자) 블록
-                # 다음 블록이 있다면 그 블록의 텍스트가 reading 상 어느 위치에 나오는지를 확인
-                if (i + 1) < len(blocks):
-                    next_btype, next_btext = blocks[i+1]
-                else:
-                    next_btype, next_btext = None, ''
-                
-                # next_btext가 혹시 reading에서 r_idx 이후에 등장한다면
-                # 그 위치를 찾아서 그 직전까지를 이 한자 블록의 후리가나로 할당
-                pos_next = -1
-                if next_btype == 'H' and next_btext:
-                    # 다음 블록이 H라면, reading 상에 exact match로 등장할 수 있으니 찾아봄
-                    pos_next = find_next_block_in_reading(next_btext)
-                
-                if pos_next >= 0:
-                    # next_btext가 r_idx 이후에 있다면, 그 직전까지를 한자 블록 후리가나로 할당
-                    allocated = reading[r_idx:pos_next]
-                    r_idx = pos_next
-                else:
-                    # 없다면 남은 reading 전부 할당
-                    allocated = reading[r_idx:]
-                    r_idx = len(reading)
-                
-                # 앞 블록이 H였으면 한자 블록 앞에 공백 삽입 (질문 예시 규칙)
-                if prev_type == 'H' and len(result) > 0 and result[-1] != ' ':
-                    result.append(' ')
-                
-                # "한자블록[후리가나]" 형태로 변환
-                if allocated:
-                    if kana_mode == 'katakana':
-                        result.append(f"{btext}[{jaconv.hira2kata(allocated)}]")
-                    else:
-                        result.append(f"{btext}[{allocated}]")
-                else:
-                    # 후리가나가 아예 없으면 그냥 한자 블록만 출력
-                    result.append(btext)
-                
-                prev_type = 'K'
-        
-        return ''.join(result)
+        cnt = 0
 
+        # 단어에 ・ 또는 ∙ 이 있을경우 분리
+        for x in word.split('・'):
+            for y in x.split('∙'):
+                if cnt != 0:
+                    result.append('・ ')
+
+                # 1) 단어를 블록 리스트로 분할
+                blocks = split_into_blocks(y)
+                
+                # reading 소비 인덱스
+                r_idx = 0
+                
+                # 다음 블록의 문자열이 reading 내에 있는지 찾는 헬퍼 함수
+                def find_next_block_in_reading(next_block_str):
+                    """reading[r_idx:]에서 next_block_str이 등장하는 첫 위치를 찾는다.
+                    없으면 -1 반환"""
+                    if not next_block_str:
+                        return -1
+                    return reading.find(next_block_str, r_idx)
+                
+                prev_type = None
+                
+                for i, (btype, btext) in enumerate(blocks):
+                    if btype == 'H':
+                        # H(히라가나/기타) 블록
+                        # 가능하면 reading에서도 btext가 일치하면 소비
+                        length = len(btext)
+                        # reading[r_idx : r_idx+length]와 btext가 같으면 그대로 소비
+                        if reading[r_idx:r_idx+length] == btext:
+                            # 그대로 사용
+                            result.append(btext)
+                            r_idx += length
+                        else:
+                            # 일치하지 않으면 그냥 원문 출력 (후리가나 소비는 없음)
+                            result.append(btext)
+                        
+                        prev_type = 'H'
+                    
+                    else:
+                        # K(한자) 블록
+                        # 다음 블록이 있다면 그 블록의 텍스트가 reading 상 어느 위치에 나오는지를 확인
+                        if (i + 1) < len(blocks):
+                            next_btype, next_btext = blocks[i+1]
+                        else:
+                            next_btype, next_btext = None, ''
+                        
+                        # next_btext가 혹시 reading에서 r_idx 이후에 등장한다면
+                        # 그 위치를 찾아서 그 직전까지를 이 한자 블록의 후리가나로 할당
+                        pos_next = -1
+                        if next_btype == 'H' and next_btext:
+                            # 다음 블록이 H라면, reading 상에 exact match로 등장할 수 있으니 찾아봄
+                            pos_next = find_next_block_in_reading(next_btext)
+                        
+                        if pos_next >= 0:
+                            # next_btext가 r_idx 이후에 있다면, 그 직전까지를 한자 블록 후리가나로 할당
+                            allocated = reading[r_idx:pos_next]
+                            r_idx = pos_next
+                        else:
+                            # 없다면 남은 reading 전부 할당
+                            allocated = reading[r_idx:]
+                            r_idx = len(reading)
+                        
+                        # 앞 블록이 H였으면 한자 블록 앞에 공백 삽입 (질문 예시 규칙)
+                        if prev_type == 'H' and len(result) > 0 and result[-1] != ' ':
+                            result.append(' ')
+                        
+                        # "한자블록[후리가나]" 형태로 변환
+                        if allocated:
+                            if kana_mode == 'katakana':
+                                result.append(f"{btext}[{jaconv.hira2kata(allocated)}]")
+                            else:
+                                result.append(f"{btext}[{allocated}]")
+                        else:
+                            # 후리가나가 아예 없으면 그냥 한자 블록만 출력
+                            result.append(btext)
+                        
+                        prev_type = 'K'
+                cnt+=1
+                
+        return ''.join(result)
 
     # 이 함수는 "문장 내 여러 '단어[후리가나]' 패턴"을 찾아 변환해 주는 예시
     # 정규식: ([^\s\[\]]+) => 공백/대괄호 제외 1글자 이상
