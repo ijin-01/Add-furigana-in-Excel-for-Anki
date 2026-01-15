@@ -1,6 +1,0 @@
-pyinstaller --onefile --noconsole --icon=app.ico --add-data="UDDigiKyokashoN-R.ttc:./" --add-data="app.ico:./" --hidden-import=fugashi --hidden-import=unidic_lite --add-data="/home/dagashi/다운로드/OneDrive-2025-02-19/venv/lib/python3.12/site-packages/unidic_lite:unidic_lite" Add_furigana_in_Excel_for_Anki.py
-
-# unidic_lite의 경로를 확인하는 코드
-import unidic_lite
-
-print(unidic_lite.__file__)
