@@ -1,4 +1,4 @@
-import re, jaconv, sys, os, csv, builtins, pandas as pd, platform, subprocess
+import re, jaconv, sys, os, csv, builtins, pandas as pd, platform, subprocess, numpy as np
 
 from fugashi import Tagger
 from PyQt6.QtGui import *
@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 
 from openpyxl import *
+from openpyxl.styles import Font
 
 # 후리가나 붙이기 ------------------------------------------------------------------
 def process_japanese_text(text, exclude_text='', kana_mode='hiragana'):
@@ -43,6 +44,14 @@ def process_japanese_text(text, exclude_text='', kana_mode='hiragana'):
                     current_buf.append(ch)
                 else:
                     # 블록 타입이 바뀌므로 flush 후 새 블록 시작
+                    flush_buffer()
+                    current_type = 'K'
+                    current_buf.append(ch)
+            # 々에 대한 처리
+            elif re.compile('々').match(ch):
+                if current_type == 'K':
+                    current_buf.append(ch)
+                else:
                     flush_buffer()
                     current_type = 'K'
                     current_buf.append(ch)
@@ -161,6 +170,7 @@ def process_japanese_text(text, exclude_text='', kana_mode='hiragana'):
                             result.append(btext)
                         
                         prev_type = 'K'
+
                 cnt+=1
                 
         return ''.join(result)
@@ -209,8 +219,9 @@ def process_japanese_text(text, exclude_text='', kana_mode='hiragana'):
         msg = "".join(result)
         if msg.startswith(' '):
             msg = msg[1:]
-        return msg
 
+        return msg
+        
     return convert_text(add_furigana_with_fugashi(text, exclude_text, kana_mode))
 '''
 japanese_text = "詐欺に遭い憤った被害者達が会社を相手に抗議活動を行った。あの人が言うと、褒め言葉も嫌味に聞こえる。"
@@ -386,118 +397,158 @@ class Thread(QThread):
             self.fault_message = '出力しようとする'+'、'.join(Existed_column_list) + '列に既にデータがあります。進めますか？'
         else:
             self.continue_process()
-    
+        
     def continue_process(self):
-        # XLSX, XLSM 파일 처리
-        if self.filepath.endswith('.xlsx') or self.filepath.endswith('.xlsm'):
-            if self.lists:
-                for x in self.lists:
-                    for y in self.get_multiple_columns_with_rows(x)[x]:
-                        item = str(self.sheet[number_to_column(column_to_number(x)+1)+str(y[0])].value)
-
-                        if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
-                            self.sheet[number_to_column(column_to_number(x)+1)+str(y[0])] = item
-                        else:
-                            self.sheet[number_to_column(column_to_number(x)+1)+str(y[0])] = process_japanese_text(text=y[1], kana_mode=self.parent.kana_mode)
-                self.workbook.save(self.filepath)
-
-            if self.tuples:
-                for x in self.tuples:
-                    words = [item for item in self.get_multiple_columns_with_rows(x[0])[x[0]]]
-                    words_number = [item[0] for item in self.get_multiple_columns_with_rows(x[0])[x[0]]]
-                    sentences = [item for item in self.get_multiple_columns_with_rows(x[1])[x[1]]]
-
-                    # 문장 처리                    
-                    for y in sentences:
-                        if y[0] in words_number:
-                            for z in words:
-                                if z[0] == y[0]:
-                                    item = str(self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])].value)
-
-                                    if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
-                                        self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = item
-                                    else:
-                                        self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = process_japanese_text(text=y[1],exclude_text=z[1], kana_mode=self.parent.kana_mode)
-                        else:
-                            item = str(self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])].value)
-                            
-                            if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
-                                self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = item
-                            else:
-                                self.sheet[number_to_column(column_to_number(x[1])+1)+str(y[0])] = process_japanese_text(text=y[1], kana_mode=self.parent.kana_mode)
-                    
-                    # 단어 처리
-                    for y in words:
-                        item = str(self.sheet[number_to_column(column_to_number(x[0])+1)+str(y[0])].value)
-
-                        if item != None and item != 'None' and item.strip() != '' and self.parent.overWrite_mode == False:
-                            self.sheet[number_to_column(column_to_number(x[0])+1)+str(y[0])] = item
-                        else:
-                            self.sheet[number_to_column(column_to_number(x[0])+1)+str(y[0])] = process_japanese_text(text=y[1], kana_mode=self.parent.kana_mode)
+        def _should_update(current_val):
+            # 값이 이미 존재하고, 덮어쓰기 모드(overWrite_mode)가 꺼져있으면 업데이트 하지 않음 (False 반환)
+            # 그 외의 경우(값이 없거나, 덮어쓰기 모드인 경우) 업데이트 진행 (True 반환)
             
+            # 문자열로 변환하여 체크 ('nan', 'None', 공백 등 처리)
+            str_val = str(current_val).strip()
+            is_empty = (current_val is None) or (str_val == '') or (str_val == 'None') or (str_val == 'nan')
+            
+            # 값이 있는데 덮어쓰기 모드가 꺼져있다면 -> 업데이트 스킵
+            if not is_empty and self.parent.overWrite_mode is False:
+                return False
+            return True
+
+        
+        # 1. Excel 파일 처리 (XLSX, XLSM)
+        if self.filepath.endswith(('.xlsx', '.xlsm')):
+            is_modified = False # 변경 사항이 있을 때만 저장하기 위한 플래그
+
+            # 1-1. 단일 리스트 처리 (self.lists)
+            if self.lists:
+                for col_char in self.lists:
+                    col_idx = column_to_number(col_char) + 1 # openpyxl은 1-based index
+                    col_data = self.get_multiple_columns_with_rows(col_char)[col_char]
+                    
+                    for row_idx, text in col_data:
+                        cell_ref = self.sheet.cell(row=row_idx, column=col_idx) # 셀 직접 접근이 더 빠름
+                        cell_font_name = cell_ref.font.name # cell에 적용된 폰트 이름 확인
+
+                        if _should_update(cell_ref.value):
+                            cell_ref.value = process_japanese_text(text=text, kana_mode=self.parent.kana_mode)  
+                            cell_ref.font = Font(name=cell_font_name) # cell에 폰트 적용
+                            is_modified = True
+
+            # 1-2. 튜플 처리 (self.tuples: 단어-문장 쌍)
+            if self.tuples:
+                for word_col, sent_col in self.tuples:
+                    word_col_idx = column_to_number(word_col) + 1
+                    sent_col_idx = column_to_number(sent_col) + 1
+
+                    # 데이터 가져오기
+                    word_data = self.get_multiple_columns_with_rows(word_col)[word_col]
+                    sent_data = self.get_multiple_columns_with_rows(sent_col)[sent_col]
+
+                    # Lookup Dictionary 생성: {row_index: text}
+                    word_map = {row: text for row, text in word_data}
+
+                    # 문장(Sentence) 처리
+                    for row_idx, sent_text in sent_data:
+                        cell_ref = self.sheet.cell(row=row_idx, column=sent_col_idx)
+                        cell_font_name = cell_ref.font.name # cell에 적용된 폰트 이름 확인
+                        
+                        if _should_update(cell_ref.value):
+                            # 같은 행(row_idx)에 단어가 존재하면 exclude_text로 사용
+                            exclude = word_map.get(row_idx) 
+                            cell_ref.value = process_japanese_text(text=sent_text, exclude_text=exclude, kana_mode=self.parent.kana_mode)
+                            cell_ref.font = Font(name=cell_font_name) # cell에 폰트 적용
+                            is_modified = True
+                    
+                    # 단어(Word) 처리
+                    for row_idx, word_text in word_data:
+                        cell_ref = self.sheet.cell(row=row_idx, column=word_col_idx)
+                        
+                        if _should_update(cell_ref.value):
+                            cell_ref.value = process_japanese_text(
+                                text=word_text, 
+                                kana_mode=self.parent.kana_mode
+                            )
+                            is_modified = True
+
+            # [I/O 최적화] 모든 작업이 끝난 후 한 번만 저장
+            if is_modified:
                 self.workbook.save(self.filepath)
 
-        # CSV 파일 처리
+        # 2. CSV 파일 처리
         elif self.filepath.endswith('.csv'):
+            # dtype=str 대신 object나 생략 권장(pandas 버전에 따라 다름), 여기선 유지
             df = pd.read_csv(self.filepath, encoding='utf-8', header=None, dtype=str)
-
+            
+            # 필요한 컬럼 수 확보
             required_cols = max([column_to_number(x) for x in self.output_columns_array])
-            while len(df.columns) <= required_cols:
-                df[f'new_col_{len(df.columns)}'] = None
+            current_cols = len(df.columns)
+            if current_cols <= required_cols:
+                # 한 번에 필요한 만큼 컬럼 추가 (반복문 제거)
+                for i in range(current_cols, required_cols + 1):
+                    df[i] = np.nan # 혹은 None
 
+            is_modified = False
+
+            # 2-1. 단일 리스트 처리
             if self.lists:
-                for x in self.lists:
-                    for y in self.get_multiple_columns_with_rows(x)[x]:
-                        item = str(df.iloc[y[0]-1, column_to_number(x)])
-                        
-                        if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
-                            df.iloc[y[0]-1, column_to_number(x)] = item
-                        else:
-                            df.iloc[y[0]-1, column_to_number(x)] = process_japanese_text(text=y[1],kana_mode=self.parent.kana_mode)
-                df.to_csv(self.filepath, encoding='utf-8-sig', index=False, header=None)
+                for col_char in self.lists:
+                    col_idx = column_to_number(col_char)
+                    col_data = self.get_multiple_columns_with_rows(col_char)[col_char]
 
+                    for row_idx, text in col_data:
+                        df_row = row_idx - 1 # DataFrame은 0-based index
+                        current_val = df.iloc[df_row, col_idx]
+
+                        if _should_update(current_val):
+                            df.iloc[df_row, col_idx] = process_japanese_text(text=text, kana_mode=self.parent.kana_mode)
+                            is_modified = True
+
+            # 2-2. 튜플 처리
             if self.tuples:
-                for x in self.tuples:
-                    words = [item for item in self.get_multiple_columns_with_rows(x[0])[x[0]]]
-                    words_number = [item[0] for item in self.get_multiple_columns_with_rows(x[0])[x[0]]]
-                    sentences = [item for item in self.get_multiple_columns_with_rows(x[1])[x[1]]]
+                for word_col, sent_col in self.tuples:
+                    word_col_idx = column_to_number(word_col)
+                    sent_col_idx = column_to_number(sent_col)
+
+                    word_data = self.get_multiple_columns_with_rows(word_col)[word_col]
+                    sent_data = self.get_multiple_columns_with_rows(sent_col)[sent_col]
+
+                    # Dictionary Lookup 생성
+                    word_map = {row: text for row, text in word_data}
 
                     # 문장 처리
-                    for y in sentences:
-                        if y[0] in words_number:
-                            for z in words:
-                                if z[0] == y[0]:
-                                    item = str(df.iloc[y[0]-1, column_to_number(x[1])])
+                    for row_idx, sent_text in sent_data:
+                        df_row = row_idx - 1
+                        current_val = df.iloc[df_row, sent_col_idx]
 
-                                    if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
-                                        df.iloc[y[0]-1, column_to_number(x[1])] = item
-                                    else:
-                                        df.iloc[y[0]-1, column_to_number(x[1])] = process_japanese_text(text=y[1], exclude_text=z[1],kana_mode=self.parent.kana_mode)
-                        else:
-                            item = str(df.iloc[y[0]-1, column_to_number(x[1])])
+                        if _should_update(current_val):
+                            exclude = word_map.get(row_idx)
+                            df.iloc[df_row, sent_col_idx] = process_japanese_text(
+                                text=sent_text, 
+                                exclude_text=exclude, 
+                                kana_mode=self.parent.kana_mode
+                            )
+                            is_modified = True
 
-                            if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
-                                df.iloc[y[0]-1, column_to_number(x[1])] = item
-                            else:
-                                df.iloc[y[0]-1, column_to_number(x[1])] = process_japanese_text(text=y[1],kana_mode=self.parent.kana_mode)
-                    
-                    #단어 처리
-                    for y in words:
-                        item = str(df.iloc[y[0]-1, column_to_number(x[0])])
+                    # 단어 처리
+                    for row_idx, word_text in word_data:
+                        df_row = row_idx - 1
+                        current_val = df.iloc[df_row, word_col_idx]
 
-                        if item != None and item != 'nan' and item.strip() != '' and self.parent.overWrite_mode == False:
-                            df.iloc[y[0]-1, column_to_number(x[0])] = item
-                        else:
-                            df.iloc[y[0]-1, column_to_number(x[0])] = process_japanese_text(text=y[1],kana_mode=self.parent.kana_mode)
+                        if _should_update(current_val):
+                            df.iloc[df_row, word_col_idx] = process_japanese_text(text=word_text, kana_mode=self.parent.kana_mode)
+                            is_modified = True
+
+            # [I/O 최적화] 저장
+            if is_modified:
                 df.to_csv(self.filepath, encoding='utf-8-sig', index=False, header=None)
 
+        # 3. 예외 처리 및 완료 신호
         else:
             self.fault_signal.emit(4)
             self.fault_message = 'ファイルの形式が間違っています。'
-            
+            return # 에러 시 함수 종료
+
         self.fault_message = '完了しました。'
         self.fault_signal.emit(3)
-
+    
 class AutoLineEdit(QLineEdit):
     def __init__(self):
         super().__init__()
@@ -804,7 +855,7 @@ class MainWindow(QWidget):
             'コンマ「,」を書いて多重入力もできます。例）A,C,E'
             ,self)
         '''
-        # 1.1버전 설명
+        # 1.1버전 이후 설명
         label_column_input = QLabel(
             '<b>使い方</b><br>'
             '<br>'
